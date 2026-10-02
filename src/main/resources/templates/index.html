@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignBridge - Sign Language Assistant</title>
+
+    <!-- MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+
+        :root {
+            --bg: #0f172a;
+            --panel: #111827;
+            --card: #1e293b;
+            --line: #334155;
+            --accent: #6366f1;
+            --accent-text: #818cf8;
+            --muted: #94a3b8;
+            --green: #10b981;
+        }
+
+        html { -webkit-text-size-adjust: 100%; }
+
+        body {
+            margin: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: var(--bg);
+            color: white;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }
+
+        header {
+            padding: clamp(10px, 2vw, 20px) clamp(14px, 3vw, 30px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            background: var(--panel);
+            border-bottom: 1px solid var(--line);
+        }
+
+        .logo { font-size: clamp(20px, 3vw, 28px); font-weight: bold; color: var(--accent-text); }
+
+        .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+        .status-dot { width: 10px; height: 10px; background: var(--green); border-radius: 50%; }
+
+        main {
+            width: 95%;
+            max-width: 1600px;
+            margin: clamp(12px, 2vw, 25px) auto;
+        }
+
+        .title-section { text-align: center; margin-bottom: clamp(12px, 2vw, 25px); }
+        .title-section h1 { margin: 0; font-size: clamp(24px, 4vw, 36px); }
+        .title-section p { color: var(--muted); margin: 8px 0 0; font-size: clamp(13px, 1.6vw, 16px); }
+
+        .mode-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: clamp(12px, 2vw, 25px);
+            flex-wrap: wrap;
+        }
+
+        .toggle-btn {
+            border: 1px solid #475569;
+            background: var(--card);
+            color: white;
+            padding: 12px clamp(16px, 3vw, 24px);
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 15px;
+            transition: 0.2s;
+            min-height: 44px;
+        }
+        .toggle-btn:hover { background: var(--line); }
+        .toggle-btn.active { background: var(--accent); border-color: var(--accent); }
+
+        .content {
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+            gap: clamp(12px, 2vw, 20px);
+            align-items: start;
+        }
+
+        .camera-card, .output-card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: clamp(12px, 2vw, 20px);
+            min-width: 0;
+        }
+        .camera-card h2, .output-card h2 { margin-top: 0; font-size: clamp(17px, 2vw, 20px); }
+
+        /* Camera box matches the real camera ratio (set from JS), so nothing is cropped
+           and the overlay stays perfectly aligned on any screen shape. */
+        .camera-container {
+            position: relative;
+            width: min(100%, calc(var(--maxh, 68vh) * var(--arn, 1.7778)));
+            aspect-ratio: var(--ar, 16 / 9);
+            margin: 0 auto;
+            background: #020617;
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        #webcam, #output_canvas, #air_canvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            transform: scaleX(-1);   /* mirror view */
+        }
+        #output_canvas, #air_canvas { pointer-events: none; }
+
+        .camera-label, .mode-label {
+            position: absolute;
+            top: 10px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: clamp(11px, 1.4vw, 13px);
+            z-index: 5;
+        }
+        .camera-label { left: 10px; background: rgba(15, 23, 42, 0.8); }
+        .mode-label { right: 10px; background: rgba(99, 102, 241, 0.9); }
+
+        .detected-box { margin-top: 16px; background: var(--card); padding: clamp(12px, 2vw, 18px); border-radius: 12px; }
+        .small-title { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+        #detectedWord { font-size: clamp(18px, 2.6vw, 25px); font-weight: bold; color: var(--accent-text); min-height: 1.3em; word-break: break-word; }
+
+        .progress-container { margin-top: 12px; width: 100%; height: 8px; background: var(--line); border-radius: 20px; overflow: hidden; }
+        #progressBar { width: 0%; height: 100%; background: var(--accent); transition: width 0.1s linear; }
+
+        .sentence-box {
+            min-height: clamp(90px, 20vh, 200px);
+            padding: clamp(12px, 2vw, 20px);
+            border-radius: 12px;
+            background: var(--card);
+            font-size: clamp(18px, 2.4vw, 24px);
+            line-height: 1.5;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
+
+        .buttons { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+        .action-btn {
+            flex: 1 1 110px;
+            border: none;
+            padding: 13px 15px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            color: white;
+            min-height: 44px;
+        }
+        .speak-btn { background: var(--accent); }
+        .clear-btn { background: var(--line); }
+        .space-btn { background: #475569; }
+
+        .info { margin-top: 20px; padding: 15px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+        .info h3 { margin-top: 0; color: var(--accent-text); }
+        .info p { color: var(--muted); font-size: 14px; line-height: 1.6; }
+
+        footer { text-align: center; padding: 30px; color: #64748b; font-size: 13px; }
+
+        /* Tablets, phones and any portrait screen: stack camera above output */
+        @media (max-width: 900px), (orientation: portrait) {
+            .content { grid-template-columns: 1fr; }
+            .camera-container { --maxh: 60vh; }
+        }
+
+        /* Short landscape screens (phones turned sideways): keep side by side, save space */
+        @media (max-height: 520px) and (orientation: landscape) {
+            .content { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+            .camera-container { --maxh: 78vh; }
+            .title-section, .info, footer { display: none; }
+            header { padding: 6px 14px; }
+            .mode-buttons { margin-bottom: 8px; }
+            .toggle-btn { padding: 8px 16px; min-height: 36px; }
+        }
+
+        /* Very small phones */
+        @media (max-width: 380px) {
+            .toggle-btn { flex: 1 1 90px; padding: 10px 8px; font-size: 14px; }
+            .sentence-box { min-height: 80px; }
+        }
+    </style>
+</head>
+
+<body>
+
+<header>
+    <div class="logo">SignBridge</div>
+    <div class="status"><span class="status-dot"></span><span>AI Engine Active</span></div>
+</header>
+
+<main>
+    <section class="title-section">
+        <h1>Sign Language Assistant</h1>
+        <p>Convert hand gestures into words, letters and speech</p>
+    </section>
+
+    <div class="mode-buttons">
+        <button class="toggle-btn active" onclick="setMode('WORDS')">Words</button>
+        <button class="toggle-btn" onclick="setMode('LETTERS')">Letters</button>
+        <button class="toggle-btn" onclick="setMode('DRAW')">Air Draw</button>
+    </div>
+
+    <div class="content">
+
+        <!-- CAMERA -->
+        <div class="camera-card">
+            <h2>Camera</h2>
+
+            <div class="camera-container" id="cameraContainer">
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="air_canvas"></canvas>
+                <canvas id="output_canvas"></canvas>
+                <div class="camera-label">Live Camera</div>
+                <div class="mode-label" id="modeIndicator">AI Engine Active</div>
+            </div>
+
+            <div class="detected-box">
+                <div class="small-title">DETECTED SIGN</div>
+                <div id="detectedWord">Waiting...</div>
+                <div class="progress-container"><div id="progressBar"></div></div>
+            </div>
+        </div>
+
+        <!-- OUTPUT -->
+        <div class="output-card">
+            <h2>Output</h2>
+            <div class="small-title">GENERATED SENTENCE</div>
+            <div id="sentenceBox" class="sentence-box">...</div>
+
+            <div class="buttons">
+                <button class="action-btn space-btn" onclick="addSpace()">Add Space</button>
+                <button class="action-btn speak-btn" onclick="speakSentence()">🔊 Speak Output</button>
+                <button class="action-btn clear-btn" onclick="clearSentence()">Clear</button>
+            </div>
+
+            <div class="info">
+                <h3>How it works</h3>
+                <p>Show your hand to the camera and hold the gesture for about one second. SignBridge detects the hand landmarks and converts recognized gestures into words or letters. Nothing is spoken until you press Speak Output.</p>
+                <p>In Air Draw mode, raise your index finger to draw in the air. An open hand pauses drawing and a closed fist works as an eraser.</p>
+            </div>
+        </div>
+
+    </div>
+</main>
+
+<footer>SignBridge &copy; 2026</footer>
+
+<script>
+    const video = document.getElementById('webcam');
+    const container = document.getElementById('cameraContainer');
+    const canvas = document.getElementById('output_canvas');
+    const ctx = canvas.getContext('2d');
+    const airCanvas = document.getElementById('air_canvas');
+    const airCtx = airCanvas.getContext('2d');
+
+    const detectedWordEl = document.getElementById('detectedWord');
+    const sentenceBoxEl = document.getElementById('sentenceBox');
+    const progressBar = document.getElementById('progressBar');
+    const modeIndicator = document.getElementById('modeIndicator');
+
+    let currentMode = "WORDS";
+    let fullSentence = [];
+    const synth = window.speechSynthesis;
+
+    // ---- Hold-to-add settings ----
+    const HOLD_MS = 1000;        // hold a sign this long before it is added
+    const SWITCH_FRAMES = 4;     // frames a new sign must persist before switching (anti-flicker)
+    const LOST_GRACE_MS = 300;   // short tracking dropouts allowed
+
+    let candidateSign = "";
+    let candidateStart = 0;
+    let lastSeenAt = 0;
+    let pendingSign = "";
+    let pendingCount = 0;
+    let lastRegisteredSign = "";
+
+    let lastX = null, lastY = null;
+    let k = 1; // drawing scale so lines look the same on any camera resolution
+
+    // NOTE: written without adjacent double brackets so Thymeleaf never treats it as an inline expression
+    const BONES = [
+        [0, 1], [1, 2], [2, 3], [3, 4],
+        [0, 5], [5, 6], [6, 7], [7, 8],
+        [5, 9], [9, 10], [10, 11], [11, 12],
+        [9, 13], [13, 14], [14, 15], [15, 16],
+        [13, 17], [17, 18], [18, 19], [19, 20],
+        [0, 17]
+    ];
+
+    // ---------------- MODE ----------------
+    function setMode(mode) {
+        currentMode = mode;
+        const btns = document.querySelectorAll('.toggle-btn');
+        btns[0].classList.toggle('active', mode === 'WORDS');
+        btns[1].classList.toggle('active', mode === 'LETTERS');
+        btns[2].classList.toggle('active', mode === 'DRAW');
+
+        resetTracker();
+        lastRegisteredSign = "";
+
+        if (mode === 'DRAW') {
+            detectedWordEl.innerText = "Air Writing Mode";
+            modeIndicator.innerText = "Air Draw Active";
+        } else {
+            detectedWordEl.innerText = "Waiting...";
+            modeIndicator.innerText = "AI Engine Active";
+        }
+    }
+
+    // ---------------- MEDIAPIPE + CAMERA ----------------
+    const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.6 });
+    hands.onResults(onResults);
+
+    const camera = new Camera(video, {
+        onFrame: async () => { await hands.send({ image: video }); },
+        facingMode: 'user',
+        width: 1280,
+        height: 720
+    });
+
+    camera.start().catch((error) => {
+        detectedWordEl.innerText = "Camera permission required";
+        console.error("Camera error:", error);
+    });
+
+    // Match canvases and the camera box to the real camera size/ratio.
+    // Runs every frame, so it also adapts if the phone is rotated.
+    function syncCanvasSize() {
+        const w = video.videoWidth, h = video.videoHeight;
+        if (!w || !h) return false;
+
+        if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+            airCanvas.width = w;
+            airCanvas.height = h;
+            container.style.setProperty('--ar', `${w} / ${h}`);
+            container.style.setProperty('--arn', (w / h).toFixed(4));
+            lastX = null; lastY = null;
+        }
+        k = Math.max(w, h) / 1280;
+        return true;
+    }
+
+    // ---------------- RESULTS ----------------
+    function onResults(results) {
+        if (!syncCanvasSize()) return;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            for (const lm of results.multiHandLandmarks) drawCyberSkeleton(lm);
+
+            if (currentMode === "DRAW") {
+                handleAirDrawing(results.multiHandLandmarks[0]);
+            } else {
+                lastX = null; lastY = null;
+                let sign = null;
+
+                if (results.multiHandLandmarks.length === 2 && currentMode === "WORDS") {
+                    sign = classifyTwoHands(results.multiHandLandmarks[0], results.multiHandLandmarks[1]);
+                } else {
+                    const lm = results.multiHandLandmarks[0];
+                    sign = currentMode === "WORDS" ? classifyWord(lm) : classifyLetter(lm);
+                }
+                processSign(sign);
+            }
+        } else {
+            resetTracker();
+            lastRegisteredSign = "";
+            if (currentMode !== "DRAW") detectedWordEl.innerText = "Waiting...";
+            lastX = null; lastY = null;
+        }
+    }
+
+    // ---------------- AIR DRAWING ----------------
+    function handleAirDrawing(lm) {
+        const f = fingerState(lm);
+
+        // Closed fist = eraser
+        if (!f.index && !f.middle && !f.ring && !f.pinky) {
+            detectedWordEl.innerText = "Eraser Active (Rubbing)";
+            const ex = lm[0].x * airCanvas.width;
+            const ey = lm[0].y * airCanvas.height;
+            const r = 50 * k;
+
+            airCtx.save();
+            airCtx.globalCompositeOperation = 'destination-out';
+            airCtx.beginPath();
+            airCtx.arc(ex, ey, r, 0, 2 * Math.PI);
+            airCtx.fill();
+            airCtx.restore();
+
+            ctx.fillStyle = "rgba(239, 68, 68, 0.4)";
+            ctx.strokeStyle = "#ef4444";
+            ctx.lineWidth = 3 * k;
+            ctx.shadowBlur = 15 * k;
+            ctx.shadowColor = "#ef4444";
+            ctx.beginPath();
+            ctx.arc(ex, ey, r, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+
+            lastX = null; lastY = null;
+            return;
+        }
+
+        // Open hand = paused
+        if (f.thumb && f.index && f.middle && f.ring && f.pinky) {
+            detectedWordEl.innerText = "Paused (Open Hand)";
+            lastX = null; lastY = null;
+            return;
+        }
+
+        // Index finger = draw
+        if (f.index && !f.middle) {
+            detectedWordEl.innerText = "Writing in Air...";
+            const x = lm[8].x * airCanvas.width;
+            const y = lm[8].y * airCanvas.height;
+
+            if (lastX !== null && lastY !== null) {
+                airCtx.save();
+                airCtx.globalCompositeOperation = 'source-over';
+                airCtx.strokeStyle = "#6366f1";
+                airCtx.lineWidth = 8 * k;
+                airCtx.lineCap = "round";
+                airCtx.lineJoin = "round";
+                airCtx.shadowBlur = 18 * k;
+                airCtx.shadowColor = "#6366f1";
+                airCtx.beginPath();
+                airCtx.moveTo(lastX, lastY);
+                airCtx.lineTo(x, y);
+                airCtx.stroke();
+                airCtx.restore();
+            }
+            lastX = x; lastY = y;
+
+            ctx.fillStyle = "#10b981";
+            ctx.shadowBlur = 20 * k;
+            ctx.shadowColor = "#10b981";
+            ctx.beginPath();
+            ctx.arc(x, y, 10 * k, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        } else {
+            detectedWordEl.innerText = "Ready to Draw";
+            lastX = null; lastY = null;
+        }
+    }
+
+    function drawCyberSkeleton(landmarks) {
+        if (currentMode === "DRAW") return;
+
+        ctx.lineWidth = 3 * k;
+        ctx.strokeStyle = "rgba(99, 102, 241, 0.8)";
+        ctx.shadowBlur = 15 * k;
+        ctx.shadowColor = "#6366f1";
+
+        for (const bone of BONES) {
+            const a = landmarks[bone[0]];
+            const b = landmarks[bone[1]];
+            ctx.beginPath();
+            ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
+            ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
+            ctx.stroke();
+        }
+
+        ctx.fillStyle = "#10b981";
+        ctx.shadowColor = "#10b981";
+        for (const p of landmarks) {
+            ctx.beginPath();
+            ctx.arc(p.x * canvas.width, p.y * canvas.height, 4 * k, 0, 2 * Math.PI);
+            ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+    }
+
+    // ---------------- HAND GEOMETRY ----------------
+    function getDistance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+    function isExtended(lm, tip, pip) {
+        return getDistance(lm[0], lm[tip]) > getDistance(lm[0], lm[pip]) * 1.08;
+    }
+
+    function isThumbExtended(lm) {
+        return getDistance(lm[4], lm[17]) > getDistance(lm[3], lm[17]) * 1.05
+            && getDistance(lm[4], lm[5]) > getDistance(lm[3], lm[5]);
+    }
+
+    function handScale(lm) { return getDistance(lm[0], lm[9]) || 1; }
+
+    function pinch(lm, a, b, ratio = 0.28) {
+        return getDistance(lm[a], lm[b]) / handScale(lm) < ratio;
+    }
+
+    function fingerState(lm) {
+        return {
+            thumb: isThumbExtended(lm),
+            index: isExtended(lm, 8, 6),
+            middle: isExtended(lm, 12, 10),
+            ring: isExtended(lm, 16, 14),
+            pinky: isExtended(lm, 20, 18)
+        };
+    }
+
+    // key like "11100" = thumb, index, middle, ring, pinky (1 = extended)
+    function fingerKey(f) {
+        return (f.thumb ? "1" : "0") + (f.index ? "1" : "0") + (f.middle ? "1" : "0") +
+               (f.ring ? "1" : "0") + (f.pinky ? "1" : "0");
+    }
+
+    // ---------------- CLASSIFIERS ----------------
+    function classifyWord(lm) {
+        const f = fingerState(lm);
+        const key = fingerKey(f);
+        const pinchIndex = pinch(lm, 4, 8);
+        const pinchMiddle = pinch(lm, 4, 12, 0.35);
+        const thumbPointsUp = lm[4].y < lm[3].y && lm[4].y < lm[2].y;
+
+        if (pinchIndex && f.middle && f.ring && f.pinky) return "Perfect / Okay";
+        if (pinchIndex && pinchMiddle && !f.ring && !f.pinky) return "O / None";
+
+        switch (key) {
+            case "11111": return "Hello / Five";
+            case "01111": return "Four";
+            case "11100": return "Wait / Three";
+            case "10000": return thumbPointsUp ? "Good / Yes" : null;
+            case "01100": return "Peace / Two";
+            case "01000": return "You / One";
+            case "11001": return "I Love You";
+            case "01001": return "Rock On";
+            case "10001": return "Call Me";
+            case "00000": return "Fist / Zero";
+        }
+        return null;
+    }
+
+    function classifyLetter(lm) {
+        const f = fingerState(lm);
+        const key = fingerKey(f);
+        const pinchIndex = pinch(lm, 4, 8);
+        const pinchMiddle = pinch(lm, 4, 12, 0.35);
+
+        if (pinchIndex && f.middle && f.ring && f.pinky) return "F";
+        if (pinchIndex && pinchMiddle && !f.ring && !f.pinky) return "O";
+
+        switch (key) {
+            case "10000": return "A";
+            case "01111": return "B";
+            case "11000": return "L";
+            case "01000": return "D";
+            case "00000": return "E";
+            case "10001": return "Y";
+            case "00001": return "I";
+        }
+        const fingers = key.slice(1);               // ignore the thumb
+        if (fingers === "1110") return "W";
+        if (fingers === "1100") return "U/V";
+        return null;
+    }
+
+    function classifyTwoHands(h1, h2) {
+        const a = classifyWord(h1);
+        const b = classifyWord(h2);
+        if (a === "Good / Yes" && b === "Good / Yes") return "Awesome";
+        if (a === "Peace / Two" && b === "Peace / Two") return "Friends";
+        if (a === "Hello / Five" && b === "Hello / Five") return "Welcome";
+        if (a === "I Love You" && b === "I Love You") return "Big Love";
+        if (a === "Fist / Zero" && b === "Fist / Zero") return "Team";
+        return null;
+    }
+
+    // ---------------- HOLD TO ADD ----------------
+    function processSign(sign) {
+        const now = performance.now();
+
+        if (!sign) {
+            if (candidateSign && now - lastSeenAt > LOST_GRACE_MS) {
+                resetTracker();
+                lastRegisteredSign = "";
+            }
+            if (!candidateSign) detectedWordEl.innerText = "Analyzing...";
+            return;
+        }
+
+        if (sign !== candidateSign) {
+            if (sign === pendingSign) pendingCount++;
+            else { pendingSign = sign; pendingCount = 1; }
+
+            if (pendingCount >= SWITCH_FRAMES) {
+                candidateSign = sign;
+                candidateStart = now;
+                lastSeenAt = now;
+                pendingSign = ""; pendingCount = 0;
+                if (sign !== lastRegisteredSign) lastRegisteredSign = "";
+                progressBar.style.width = '0%';
+                detectedWordEl.innerText = sign;
+            }
+            return;
+        }
+
+        pendingSign = ""; pendingCount = 0;
+        lastSeenAt = now;
+        detectedWordEl.innerText = sign;
+
+        if (sign === lastRegisteredSign) {
+            progressBar.style.width = '100%';   // already added; lower your hand to repeat
+            return;
+        }
+
+        const progress = Math.min((now - candidateStart) / HOLD_MS, 1);
+        progressBar.style.width = `${progress * 100}%`;
+
+        if (progress >= 1) {
+            addSignToOutput(sign);
+            lastRegisteredSign = sign;
+        }
+    }
+
+    function resetTracker() {
+        candidateSign = "";
+        candidateStart = 0;
+        pendingSign = "";
+        pendingCount = 0;
+        progressBar.style.width = '0%';
+    }
+
+    // ---------------- OUTPUT (no auto speech) ----------------
+    function addSignToOutput(rawSign) {
+        const cleanSign = rawSign.split(" / ")[0];
+
+        if (currentMode === "LETTERS") {
+            let text = fullSentence.length > 0 ? fullSentence.pop() : "";
+            text += cleanSign;
+            fullSentence.push(text);
+        } else {
+            fullSentence.push(cleanSign);
+        }
+        updateSentenceBox();
+    }
+
+    function addSpace() {
+        if (currentMode === "LETTERS") fullSentence.push("");
+        lastRegisteredSign = "";
+    }
+
+    function updateSentenceBox() {
+        if (currentMode !== "DRAW") {
+            sentenceBoxEl.innerText = fullSentence.join(" ").trim() || "...";
+        }
+    }
+
+    function clearSentence() {
+        fullSentence = [];
+        lastRegisteredSign = "";
+        resetTracker();
+        sentenceBoxEl.innerText = "...";
+        airCtx.clearRect(0, 0, airCanvas.width, airCanvas.height);
+    }
+
+    function speakSentence() {
+        const text = fullSentence.join(" ").trim();
+        if (!text || !synth) return;
+        synth.cancel();
+        synth.speak(new SpeechSynthesisUtterance(text));
+    }
+</script>
+
+</body>
+</html>
